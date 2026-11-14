@@ -11,10 +11,31 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Open project file
+      - name: Extract project from zip
         run: |
-          unzip -q candysmash.dat -d project
-          ls -A project
+          f=""
+          if [ -f candysmash.dat ]; then f=candysmash.dat; else f=$(ls *.zip 2>/dev/null | head -n1); fi
+          if [ -n "$f" ]; then
+            rm -rf project
+            mkdir -p project
+            unzip -q -o "$f" -d project
+            echo "Extracted $f"
+          else
+            echo "No candysmash.dat / zip found, using repo files as they are."
+          fi
+
+      - name: Find Gradle project folder
+        id: proj
+        run: |
+          f=$(find . -maxdepth 4 -name 'settings.gradle*' -not -path './.git/*' | head -n1)
+          if [ -z "$f" ]; then
+            echo "settings.gradle NOT FOUND. Files in repo:"
+            find . -maxdepth 4 -not -path './.git/*' | head -80
+            exit 1
+          fi
+          d=$(dirname "$f")
+          echo "Gradle project folder: $d"
+          echo "dir=$d" >> "$GITHUB_OUTPUT"
 
       - uses: actions/setup-java@v4
         with:
@@ -35,26 +56,27 @@ jobs:
           if [ -n "$KEYSTORE_BASE64" ]; then
             echo "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/upload-keystore.jks"
             echo "KEYSTORE_FILE=$RUNNER_TEMP/upload-keystore.jks" >> "$GITHUB_ENV"
+            echo "Signing key found."
           else
             echo "No signing key set: release AAB will be unsigned."
           fi
 
       - name: Build debug APK and release AAB
-        working-directory: project
+        working-directory: ${{ steps.proj.outputs.dir }}
         env:
           KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
           KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
         run: gradle assembleDebug bundleRelease --no-daemon
 
-      - name: Upload test APK (test ads)
+      - name: Upload APK (test ads, for phone testing)
         uses: actions/upload-artifact@v4
         with:
-          name: CandySmash-test-apk
-          path: project/app/build/outputs/apk/debug/*.apk
+          name: CandySmash-apk
+          path: ${{ steps.proj.outputs.dir }}/app/build/outputs/apk/debug/*.apk
 
       - name: Upload release AAB (real ads, for Play Console)
         uses: actions/upload-artifact@v4
         with:
           name: CandySmash-release-aab
-          path: project/app/build/outputs/bundle/release/*.aab
+          path: ${{ steps.proj.outputs.dir }}/app/build/outputs/bundle/release/*.aab
